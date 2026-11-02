@@ -2,7 +2,10 @@
 """Shared queue parsing/filter helpers for JobHunt scripts."""
 
 import fcntl
+import ipaddress
 import re
+import socket
+from urllib.parse import urlparse
 
 ATS_PATTERNS = {
     "ashby": ["ashbyhq.com"],
@@ -147,3 +150,41 @@ def filter_jobs(jobs, actionable_only=False, ats_filter=None):
 
     return out
 
+
+def is_safe_url(url: str):
+    """Validate URL scheme and block private/loopback/link-local IPs (SSRF prevention)."""
+    if not isinstance(url, str):
+        return False, "Invalid URL type"
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False, "Malformed URL"
+
+    if parsed.scheme not in ("http", "https"):
+        return False, f"Unsupported URL scheme: {parsed.scheme}"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "Missing hostname"
+
+    try:
+        addr_info = socket.getaddrinfo(hostname, None)
+    except Exception as e:
+        return False, f"DNS resolution failed: {e}"
+
+    for info in addr_info:
+        ip_str = info[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+            if ip.is_loopback:
+                return False, f"Access to loopback address '{hostname}' is blocked"
+            if ip.is_link_local:
+                return False, f"Access to link-local address '{hostname}' is blocked"
+            if ip.is_private:
+                return False, f"Access to private network '{hostname}' is blocked"
+            if ip.is_multicast:
+                return False, f"Access to multicast address '{hostname}' is blocked"
+        except ValueError:
+            return False, f"Invalid IP address resolved: {ip_str}"
+
+    return True, "Safe URL"
