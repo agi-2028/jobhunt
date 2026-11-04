@@ -2,7 +2,10 @@
 """Shared queue parsing/filter helpers for JobHunt scripts."""
 
 import fcntl
+import ipaddress
 import re
+import socket
+from urllib.parse import urlparse
 
 ATS_PATTERNS = {
     "ashby": ["ashbyhq.com"],
@@ -147,3 +150,50 @@ def filter_jobs(jobs, actionable_only=False, ats_filter=None):
 
     return out
 
+
+def is_safe_url(url: str) -> tuple[bool, str]:
+    """Validate URL scheme and target IP to prevent SSRF and internal scanning."""
+    if not url or not isinstance(url, str):
+        return False, "Empty or invalid URL"
+
+    try:
+        parsed = urlparse(url.strip())
+    except Exception as e:
+        return False, f"URL parse error: {e}"
+
+    if parsed.scheme.lower() not in ("http", "https"):
+        return False, f"Unsupported scheme: '{parsed.scheme}' (only http/https allowed)"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "Missing hostname in URL"
+
+    try:
+        addr_info = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as e:
+        return False, f"Could not resolve host '{hostname}': {e}"
+    except Exception as e:
+        return False, f"Resolution error for '{hostname}': {e}"
+
+    if not addr_info:
+        return False, f"No address found for host '{hostname}'"
+
+    for info in addr_info:
+        sockaddr = info[4]
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False, f"Invalid IP address resolved: {ip_str}"
+
+        # Check safety of resolved IP
+        if ip.is_loopback:
+            return False, f"Access to loopback address '{hostname}' ({ip_str}) is blocked"
+        if ip.is_link_local:
+            return False, f"Access to link-local address '{hostname}' ({ip_str}) is blocked"
+        if ip.is_private:
+            return False, f"Access to private IP address '{hostname}' ({ip_str}) is blocked"
+        if ip.is_reserved or ip.is_multicast:
+            return False, f"Access to reserved/multicast address '{hostname}' ({ip_str}) is blocked"
+
+    return True, "OK"
