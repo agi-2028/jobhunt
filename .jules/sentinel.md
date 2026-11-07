@@ -1,0 +1,6 @@
+# Sentinel Journal - Critical Security Learnings
+
+## 2026-03-11 - Mitigating SSRF and Disabling Insecure SSL Bypasses in Preflight URL Check
+**Vulnerability:** `workspace/scripts/preflight-check.py` configured an SSL context with `check_hostname = False` and `verify_mode = ssl.CERT_NONE`, exposing outbound API and web requests to MITM attacks. Furthermore, user-supplied URLs from the web dashboard were fetched without validating protocols or checking for SSRF against loopback addresses (`localhost`, `127.0.0.1`), private IP ranges, or cloud metadata endpoints (`169.254.169.254`).
+**Learning:** URL check scripts in this pipeline interact with arbitrary job URLs submitted by users or discovered via automated scrapers. Completely disabling SSL certificate verification to avoid certificate errors creates significant MITM vulnerability, and failing to resolve and validate host IPs allows internal network port scanning and metadata exfiltration.
+**Prevention:** Use standard certificate verification via `ssl.create_default_context()`. Centralize outbound URL validation in `workspace/scripts/queue_utils.py:is_safe_url` to restrict schemes strictly to `http`/`https` and resolve destination hosts against loopback, private, link-local, and reserved IP subnets before dispatching requests.
