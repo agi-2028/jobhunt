@@ -2,7 +2,10 @@
 """Shared queue parsing/filter helpers for JobHunt scripts."""
 
 import fcntl
+import ipaddress
 import re
+import socket
+import urllib.parse
 
 ATS_PATTERNS = {
     "ashby": ["ashbyhq.com"],
@@ -147,3 +150,47 @@ def filter_jobs(jobs, actionable_only=False, ats_filter=None):
 
     return out
 
+
+def is_safe_url(url: str) -> tuple[bool, str]:
+    """Validate URL scheme and resolve target to ensure it is not loopback, link-local, or private (SSRF protection)."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception as e:
+        return False, f"Failed to parse URL: {e}"
+
+    if parsed.scheme.lower() not in ("http", "https"):
+        return False, f"Unsupported scheme: {parsed.scheme} (only http and https allowed)"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "Missing hostname"
+
+    try:
+        # Resolve all addresses for the hostname (IPv4/IPv6)
+        addr_info = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as e:
+        return False, f"Could not resolve host '{hostname}': {e}"
+    except Exception as e:
+        return False, f"Hostname resolution error for '{hostname}': {e}"
+
+    if not addr_info:
+        return False, f"No address found for host '{hostname}'"
+
+    for entry in addr_info:
+        sockaddr = entry[4]
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False, f"Invalid IP address: {ip_str}"
+
+        if ip.is_loopback:
+            return False, f"Access to loopback address '{hostname}' is blocked"
+        if ip.is_link_local:
+            return False, f"Access to link-local address '{hostname}' is blocked"
+        if ip.is_private:
+            return False, f"Access to private address '{hostname}' is blocked"
+        if ip.is_reserved:
+            return False, f"Access to reserved address '{hostname}' is blocked"
+
+    return True, "Safe"
